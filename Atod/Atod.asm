@@ -101,7 +101,7 @@ LOCAL $result : QWORD, \
                 sub eax, '0'
                 mov $digit, eax
                 fild $digit
-                fadd
+                fadd            ; acc2, 10, acc    
                 inc ecx
                 
                 lodsb
@@ -113,49 +113,29 @@ LOCAL $result : QWORD, \
                 jz fexp
 
                 jmp fracCycle
-            
-    fexp:       ; Parse exp
+    ; acc2, 10, acc
+    fexp:       mov edi, 1
                 
                 ; acc2, 10, acc
     fform:      fxch st(1)          ; 10, acc2, acc
                 mov $digit, ecx
                 fild $digit         ; ecx, 10, acc2, acc
                 fxch st(1)          ; 10, ecx, acc2, acc
-                fyl2x               ; ecx * log2(10), acc2, acc
-                fld1                ; 1, ecx * log2(10), acc2, acc
-                fscale              ; 10 ^ ecx, ecx * log2(10), acc2, acc
-                fxch st(1)          ; ecx * log2(10), 10 ^ ecx, acc2, acc
                 
-                fld st(0)
-                fstcw $cw
-                mov ax, $cw
-                and ax, AND_ROUND
-                or ax, OR_TRUNCATE
-                mov $cw, ax
-                fldcw $cw
-                frndint
-                and ax, AND_ROUND
-                mov $cw, ax
-                fldcw $cw
-                fsub
-                ;fxtract
-                ;fincstp             ; frac, ecx * log2(10), 10 ^ ecx, acc2, acc
-                ;fxch st(1)
-                ;fstp $result ; just pop             ; frac, 10 ^ ecx, acc2, acc
-                
-                f2xm1               ; 2 ^ frac - 1, 10 ^ ecx, acc2, acc
-                fld1                ; 1, 2 ^ frac - 1, 10 ^ ecx, acc2, acc
-                fadd                ; 2 ^ frac, 10 ^ ecx, acc2, acc
-                fmul                ; 10 ^ ecx, acc2, acc
+                call fpow           ; 10 ^ ecx, acc2, acc
                 
                 fdiv                ; acc2 / 10 ^ ecx, acc
-                fadd
-				fld st(0)
-
-                jmp form
-            
-    exp:        ; Parse exp
+                fadd                ; acc2 / 10 ^ ecx + acc
+				
+                test edi, edi
+                jz skipFexp
+                call parseExp
                 
+    skipFexp:   fld st(0)
+                jmp form
+             
+    ; acc, 10
+    exp:        call parseExp
                 
     form:       ;  acc, 10
 				fxch st(1)
@@ -172,6 +152,81 @@ LOCAL $result : QWORD, \
                 lodsb
                 jmp skipWs
     exitSkipWs: retn
+    
+    ; Spoils EAX
+    fpow:       fyl2x               ; ecx * log2(10), acc2, acc
+                fld1                ; 1, ecx * log2(10), acc2, acc
+                fscale              ; 10 ^ ecx, ecx * log2(10), acc2, acc
+                
+                fxch st(1)          ; ecx * log2(10), 10 ^ ecx, acc2, acc
+                fld st(0)
+                fstcw $cw
+                mov ax, $cw
+                and ax, AND_ROUND
+                or ax, OR_TRUNCATE
+                mov $cw, ax
+                fldcw $cw
+                frndint
+                and ax, AND_ROUND
+                mov $cw, ax
+                fldcw $cw
+                fsub
+                
+                f2xm1               ; 2 ^ frac - 1, 10 ^ ecx, acc2, acc
+                fld1                ; 1, 2 ^ frac - 1, 10 ^ ecx, acc2, acc
+                fadd                ; 2 ^ frac, 10 ^ ecx, acc2, acc
+                fmul                ; 10 ^ ecx, acc2, acc
+
+                retn
+    
+    parseExp:   xor eax, eax
+                lodsb
+                mov ebx, BASE
+                xor ecx, ecx
+                xor edx, edx
+                xor edi, edi    ; SGN
+                cmp al, '+'
+                jz expPlus
+                cmp al, '-'
+                jz expMinus
+                jmp expDigits
+                
+    expPlus:    lodsb
+                jmp expDigits
+    
+    expMinus:   lodsb
+                inc edi
+    
+    expDigits:  xchg eax, ecx
+                mul ebx
+                jo err          ; Overflow
+                xchg eax, ecx
+                
+                cmp al, '0'
+                jb err
+                cmp al, '9'
+                ja err
+                
+                sub al, '0'
+                add ecx, eax
+                jo err          ; Overflow
+                
+                lodsb
+                test al, al
+                jz exitExp
+
+                jmp expDigits
+                
+    exitExp:    mov $digit, ecx
+                fild $digit
+                test edi, edi
+                jz posExp
+                fchs
+                
+    posExp:     fld $base
+                call fpow           ; 10 ^ exp, acc, 10
+                fmul                ; acc * 10 ^ exp, 10
+                retn
     
 ; Store NaN in this bih
     err:        xor eax, eax
